@@ -743,7 +743,7 @@ namespace skyline::gpu::interconnect {
                                 return std::nullopt;
                             })};
 
-                            shader.program = gpu.shader.ParseGraphicsShader(shader.data, shader.stage, shader.offset);
+                            shader.program = gpu.shader.ParseGraphicsShader(shader.stage, shader.data, shader.offset, bindlessTextureConstantBufferIndex);
 
                             if (shader.stage != ShaderCompiler::Stage::VertexA && shader.stage != ShaderCompiler::Stage::VertexB) {
                                 pipelineStage.program.emplace<std::reference_wrapper<ShaderCompiler::IR::Program>>(*shader.program);
@@ -1527,7 +1527,7 @@ namespace skyline::gpu::interconnect {
         /* Index Buffer */
       private:
         struct IndexBuffer {
-            IOVA start{}, end{}; //!< IOVAs covering a contiguous region in GPU AS with the index buffer
+            IOVA start{}, end{}; //!< IOVAs covering a contiguous region in GPU AS containing the index buffer (end does not represent the true extent of the index buffers, just a maximum possible extent and is set to extremely high values which cannot be used to create a buffer)
             vk::IndexType type{};
             vk::DeviceSize viewSize{}; //!< The size of the cached view
             std::shared_ptr<BufferView> view{}; //!< A cached view tied to the IOVAs and size to allow for a faster lookup
@@ -1546,6 +1546,15 @@ namespace skyline::gpu::interconnect {
                 }
             }
         } indexBuffer{};
+
+        /* Textures */
+      private:
+        u32 bindlessTextureConstantBufferIndex{};
+
+      public:
+        void SetBindlessTextureConstantBufferIndex(u32 index) {
+            bindlessTextureConstantBufferIndex = index;
+        }
 
       public:
         void SetIndexBufferStartIovaHigh(u32 high) {
@@ -1590,16 +1599,14 @@ namespace skyline::gpu::interconnect {
 
         BufferView *GetIndexBuffer(u32 elementCount) {
             auto size{indexBuffer.GetIndexBufferSize(elementCount)};
-            if (indexBuffer.start > indexBuffer.end || indexBuffer.start == 0 || indexBuffer.end == 0)
+            if (indexBuffer.start > indexBuffer.end || indexBuffer.start == 0 || indexBuffer.end == 0 || size == 0)
                 return nullptr;
-            else if (indexBuffer.view)
+            else if (indexBuffer.view && size == indexBuffer.viewSize)
                 return indexBuffer.view.get();
 
             GuestBuffer guestBuffer;
-            if (guestBuffer.mappings.empty()) {
-                auto mappings{channelCtx.asCtx->gmmu.TranslateRange(indexBuffer.start, size)};
-                guestBuffer.mappings.assign(mappings.begin(), mappings.end());
-            }
+            auto mappings{channelCtx.asCtx->gmmu.TranslateRange(indexBuffer.start, size)};
+            guestBuffer.mappings.assign(mappings.begin(), mappings.end());
 
             indexBuffer.view = gpu.buffer.FindOrCreate(guestBuffer);
             return indexBuffer.view.get();
